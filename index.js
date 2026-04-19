@@ -2,7 +2,12 @@ import express from "express";
 import bodyParser from "body-parser";
 import pg from "pg";
 import bcrypt from "bcrypt"
+import session from "express-session";
+import passport from "passport";
+import { Strategy } from "passport-local";
+import env from "dotenv";
 
+env.config();
 const app = express();
 const port = 3000;
 const saltRounds = 10;
@@ -18,6 +23,24 @@ db.connect();
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
+app.use(session({
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: true,
+    cookie: {
+        maxAge: 1000 * 60 * 60 * 0.5
+    }
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+
+app.get("/secrets", (req, res) => {
+    if (req.isAuthenticated()) {
+        return res.render("secrets.ejs");
+    } else {
+        return res.redirect("/login")
+    }
+})
 
 app.get("/", (req, res) => {
     res.render("home.ejs");
@@ -46,38 +69,54 @@ app.post("/register", async(req, res) => {
             const salt = bcrypt.genSaltSync(saltRounds);
             const hash = bcrypt.hashSync(password, salt);
             const result = await db.query(
-                "INSERT INTO users (email, salt, hash) VALUES ($1, $2, $3) returning uid", [email, salt, hash]
+                "INSERT INTO users (email, salt, hash) VALUES ($1, $2, $3) returning *", [email, salt, hash]
             );
-            console.log(result);
+            const user = result.rows[0];
+            return req.login(user, (err) => {
+                if (err) {
+                    console.error(err)
+                }
+                return res.redirect("/secrets");
+            })
         }
     } catch (err) {
-        console.log(err);
+        console.error(err);
     }
-    return res.redirect("login")
+    return res.redirect("/login")
 });
 
-app.post("/login", async(req, res) => {
-    const email = req.body.username;
-    const password = req.body.password;
+app.post("/login", passport.authenticate("local", {
+    successRedirect: "/secrets",
+    failureRedirect: "/login"
+}));
 
+passport.use(new Strategy(async function verify(username, password, cb) {
     try {
         const result = await db.query("SELECT * FROM users WHERE email = $1", [
-            email,
+            username,
         ]);
         if (result.rows.length > 0) {
             const user = result.rows[0];
             if (bcrypt.compareSync(password, user.hash)) {
-                res.render("secrets.ejs");
+                return cb(null, user)
             } else {
-                res.send("Incorrect Password");
+                return cb(null, false)
             }
         } else {
-            res.send("User not found");
+            return cb("User not found")
         }
     } catch (err) {
-        console.log(err);
+        return cb(err);
     }
-});
+}))
+
+passport.serializeUser((user, cb) => {
+    cb(null, user);
+})
+
+passport.deserializeUser((user, cb) => {
+    cb(null, user);
+})
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
