@@ -35,10 +35,12 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.get("/secrets", (req, res) => {
+app.get("/secrets", async(req, res) => {
     if (req.isAuthenticated()) {
         console.log(req.user);
-        return res.render("secrets.ejs", {...req.user });
+        const result = await db.query("select secret from users where uid=$1", [req.user.uid])
+        const secret = result.rows[0].secret;
+        return res.render("secrets.ejs", { secret: secret || "You should submit a secret" });
     } else {
         return res.redirect("/login")
     }
@@ -56,7 +58,7 @@ app.post("/submit", async(req, res) => {
     if (req.isAuthenticated()) {
         try {
             await db.query("update users set secret=$1 where uid=$2", [req.body.secret, parseInt(req.user.uid)])
-            req.user.secret = req.body.secret
+
             return res.redirect("/secrets")
         } catch (err) {
             console.error(err)
